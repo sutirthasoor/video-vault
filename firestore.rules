@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function isAdmin(){ return request.auth != null && exists(/databases/$(db)/documents/admins/$(request.auth.uid)); }
+
+    match /admins/{id} {
+      allow read: if request.auth != null && (request.auth.uid == id || isAdmin());
+      // first-ever admin: allowed only until meta/adminLock exists
+      allow create: if request.auth != null && request.auth.uid == id && !exists(/databases/$(db)/documents/meta/adminLock);
+      allow create, delete: if isAdmin();
+    }
+    match /meta/{id} {
+      allow read: if true;
+      allow create: if id == 'adminLock' && request.auth != null && !exists(/databases/$(db)/documents/meta/adminLock)
+        && existsAfter(/databases/$(db)/documents/admins/$(request.auth.uid));
+    }
+
+    // Public album info: title, description, price, and video TITLES only (no URLs)
+    match /albums/{id} { allow read: if true; allow write: if isAdmin(); }
+
+    // The YouTube URLs live here. Only admins and customers who bought the album can read them.
+    match /secrets/{id} {
+      allow read: if isAdmin()
+        || (request.auth != null && id in get(/databases/$(db)/documents/users/$(request.auth.uid)).data.purchasedIds);
+      allow write: if isAdmin();
+    }
+
+    match /orders/{id} {
+      allow read: if isAdmin() || (request.auth != null && resource.data.uid == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow update: if isAdmin();
+    }
+    match /users/{uid} {
+      allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+      allow create, update: if request.auth != null && (request.auth.uid == uid || isAdmin());
+      // !!! DEMO ONLY !!! Payment is simulated, so the browser may write its own purchasedIds/wallet.
+      // Before going live, write purchases from a Cloud Function / server after the payment webhook
+      // (e.g. Paytm) and change this rule to: allow create, update: if isAdmin();
+    }
+  }
+}
